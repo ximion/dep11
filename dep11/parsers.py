@@ -211,9 +211,8 @@ def _parse_screenshots_tag(subs):
                 if attr_dic['type'] == 'default':
                     screenshot['default'] = True
             # in case of old styled xmls
-            url = usubs.text
+            url = usubs.text.strip()
             if url:
-                url = url.strip()
                 screenshot['source-image'] = {'url': url}
                 shots.append(screenshot)
                 continue

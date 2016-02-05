@@ -18,6 +18,7 @@
 import os
 import gzip
 import logging as log
+import re
 
 import zlib
 import cairo
@@ -25,6 +26,7 @@ import gi
 gi.require_version('Rsvg', '2.0')
 from gi.repository import Rsvg
 from configparser import ConfigParser
+from contextlib import closing
 from PIL import Image
 from io import StringIO, BytesIO
 
@@ -113,17 +115,17 @@ class IconHandler:
 
         # load the 'main' component of the base suite, in case the given suite depends on it
         if base_suite_name:
-            self._load_contents_data(arch_name, base_suite_name, 'main')
+            self._load_data(arch_name, base_suite_name, 'main')
 
-        self._load_contents_data(arch_name, suite_name, archive_component)
+        self._load_data(arch_name, suite_name, archive_component)
         # always load the "main" component too, as this holds the icon themes, usually
-        self._load_contents_data(arch_name, suite_name, "main")
+        self._load_data(arch_name, suite_name, "main")
 
         # FIXME: On Ubuntu, also include the universe component to find more icons, since
         # they have split the default iconsets for KDE/GNOME apps between main/universe.
         universe_cfname = os.path.join(self._mirror_dir, "dists", suite_name, "universe", "Contents-%s.gz" % (arch_name))
         if os.path.isfile(universe_cfname):
-            self._load_contents_data(arch_name, suite_name, "universe")
+            self._load_data(arch_name, suite_name, "universe")
 
         loaded_themes = set(theme.name for theme in self._themes)
         missing = set(self._theme_names) - loaded_themes
@@ -137,19 +139,34 @@ class IconHandler:
             self._wanted_icon_sizes.append(IconSize(strsize))
 
 
-    def _load_contents_data(self, arch_name, suite_name, component):
+    def _load_data(self, arch_name, suite_name, component):
         # load and preprocess the large file.
+        # we load Contents files and theme files from their .debs
         # we don't show mercy to memory here, we just want the icon lookup to be fast,
         # so we need to cache the data.
+        seeded_themes = "|".join(self._theme_names)
+        re_icons = re.compile('^usr/share/icons/(?:%s)(?!/index\.theme)' % seeded_themes)
+        re_index = re.compile('^usr/share/icons/(?:%s)/index\.theme' % seeded_themes)
         for fname, pkg in parse_contents_file(self._mirror_dir, suite_name, component, arch_name):
-            if fname.startswith('usr/share/pixmaps/'):
+            # first we find all files which Contents has in /usr/share/pixmaps
+            # or /usr/share/icons/<seeded package>
+            if fname.startswith('usr/share/pixmaps/') or re_icons.match(fname):
                 self._icon_files[fname] = pkg
                 continue
-            for name in self._theme_names:
-                if fname == 'usr/share/icons/{}/index.theme'.format(name):
-                    self._themes.append(Theme(name, pkg.filename))
-                elif fname.startswith('usr/share/icons/{}'.format(name)):
-                    self._icon_files[fname] = pkg
+
+            # then we look at index.theme for seeded themes
+            if not re_index.match(fname):
+                continue
+
+            # get the name of the theme
+            directory = os.path.basename(os.path.dirname(fname))
+
+            self._themes.append(Theme(directory, pkg.filename))
+            with closing(pkg) as p:
+                for deb_fname in p.debfile.get_filelist():
+                    if deb_fname.startswith('usr/share/icons') and \
+                       not deb_fname.endswith('/'):
+                        self._icon_files[deb_fname] = pkg
 
 
     def _possible_icon_filenames(self, icon, size):

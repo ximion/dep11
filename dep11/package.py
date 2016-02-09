@@ -63,7 +63,7 @@ class Package:
         return "%s/%s/%s" % (self.name, self.version, self.arch)
 
 
-    def close_debfile(self):
+    def close(self):
         self._debfile = None
 
 

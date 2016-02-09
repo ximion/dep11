@@ -321,6 +321,6 @@ class MetadataExtractor:
 
         # ensure DebFile is closed so we don't run out of FDs when too many
         # files are open.
-        pkg.close_debfile()
+        pkg.close()
 
         return cpts

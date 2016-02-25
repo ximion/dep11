@@ -52,7 +52,7 @@ def extract_metadata(mde, sn, pkg):
     cpts = mde.process(pkg)
 
     msgtxt = "Processed ({0}/{1}): %s (%s/%s), found %i" % (pkg.name, sn, pkg.arch, len(cpts))
-    return msgtxt
+    return (msgtxt, all(not x.has_ignore_reason() for x in cpts))
 
 
 class DEP11Generator:
@@ -195,6 +195,7 @@ class DEP11Generator:
 
         for component in suite['components']:
             all_cpt_pkgs = list()
+            new_components = False
             for arch in suite['architectures']:
                 pkglist = self._all_pkgs[suite_name][component][arch]
 
@@ -233,8 +234,11 @@ class DEP11Generator:
                 # set up multiprocessing
                 with mp.Pool(maxtasksperchild=24) as pool:
                     count = 1
-                    def handle_results(message):
+                    def handle_results(result):
                         nonlocal count
+                        nonlocal new_components
+                        (message, any_components) = result
+                        new_components = new_components or any_components
                         log.info(message.format(count, len(pkgs_todo)))
                         count += 1
 
@@ -256,6 +260,10 @@ class DEP11Generator:
                                     callback=handle_results, error_callback=handle_error)
                     pool.close()
                     pool.join()
+
+                if not new_components:
+                    log.info("Skipping %s/%s/%s, no components in any of the new packages.", suite_name, component, arch)
+                    continue
 
                 # reopen the cache, we need it
                 self._cache.reopen()

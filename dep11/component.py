@@ -30,10 +30,11 @@ import hashlib
 
 ###########################################################################
 DEP11_VERSION = "0.8"
-time_str = str(datetime.date.today())
+now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 dep11_header_template = {
     "File": "DEP-11",
-    "Version": DEP11_VERSION
+    "Version": DEP11_VERSION,
+    "Time": now
 }
 ###########################################################################
 

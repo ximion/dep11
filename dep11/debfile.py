@@ -27,6 +27,8 @@ class DebFile:
         self._deb = apt_inst.DebFile(fname)
         self._filelist = None
 
+    def extract(self, directory):
+        self._deb.data.extractall(directory)
 
     def get_filelist(self):
         '''

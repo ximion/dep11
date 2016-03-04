@@ -20,7 +20,7 @@ import gzip
 import bz2
 import logging as log
 from .debfile import DebFile
-from apt_pkg import TagFile, version_compare
+from apt_pkg import TagFile, parse_depends, version_compare
 from xml.sax.saxutils import escape
 
 
@@ -35,7 +35,11 @@ class Package:
 
         self._description = dict()
         self._debfile = None
+        self._depends = list()
 
+    @property
+    def depends(self):
+        return self._depends
 
     @property
     def filename(self):
@@ -117,13 +121,31 @@ def read_packages_dict_from_file(archive_root, suite, component, arch, with_desc
     f = gzip.open(source_path, 'rb')
     tagf = TagFile(f)
     package_dict = dict()
+    all_packages = dict()
+    # we might see a package for the first time as a dependency, not as the package itself
+    # in that case, store this in a (Package, dependency) list to come back to at the end
+    pkg_depends_todo = list()
     for section in tagf:
         pkg = Package(section['Package'], section['Version'], section['Architecture'])
         if not section.get('Filename'):
             print("Package %s-%s has no filename specified." % (pkg['name'], pkg['version']))
             continue
-        pkg.filename = section['Filename']
+        pkg.filename = os.path.join(archive_root, section['Filename'])
+        all_packages[pkg.name] = pkg
         pkg.maintainer = section['Maintainer']
+        try:
+            # Depends: a | b, c -> [[a, b], c]
+            depends = parse_depends(section['Depends'])
+            for depgroup in depends:
+                for (dependency, _, _) in depgroup:
+                    if dependency in all_packages:
+                        # we've seen it already, so put it on the list
+                        pkg.depends.append(all_packages[pkg])
+                    else:
+                        # we haven't, record that we need to come back to this later
+                        pkg_depends_todo.append((pkg, dependency))
+        except KeyError:
+            pass
 
         if with_description:
             if pkgl10n.get(pkg.name):
@@ -137,6 +159,10 @@ def read_packages_dict_from_file(archive_root, suite, component, arch, with_desc
             if compare >= 0:
                 continue
         package_dict[pkg.name] = pkg
+    # revisit all deferred dependencies and fill the corresponding Package in
+    for (pkg, dep) in pkg_depends_todo:
+        if dep in all_packages:
+            pkg.depends.append(all_packages[dep])
     f.close()
 
     return package_dict

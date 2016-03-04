@@ -33,7 +33,7 @@ class MetadataExtractor:
     Takes a deb file and extracts component metadata from it.
     '''
 
-    def __init__(self, suite_name, component, dcache, icon_handler):
+    def __init__(self, suite_name, component, dcache, icon_handler, langpacks):
         '''
         Initialize the object with List of files.
         '''
@@ -44,6 +44,7 @@ class MetadataExtractor:
         self.write_to_cache = True
 
         self._icon_handler = icon_handler
+        self._langpacks = langpacks
 
 
     def reopen_cache(self):
@@ -232,7 +233,7 @@ class MetadataExtractor:
                     else:
                         # we have a .desktop component, extend it with the associated .desktop data
                         # if a metainfo file exists, we should ignore NoDisplay flags in .desktop files.
-                        read_desktop_data(cpt, data['data'], ignore_nodisplay=True)
+                        read_desktop_data(cpt, data['data'], self._langpacks, ignore_nodisplay=True)
                         cpt.set_srcdata_checksum_from_data(xml_content + data['data'] + pkg.version)
                     del mdata_raw[cpt.cid]
 
@@ -248,7 +249,7 @@ class MetadataExtractor:
                     cpt.add_hint(mdata['error']['tag'], mdata['error']['params'])
                     component_dict[cpt.cid] = cpt
                 else:
-                    ret = read_desktop_data(cpt, mdata['data'])
+                    ret = read_desktop_data(cpt, mdata['data'], self._langpacks)
                     if ret or not cpt.has_ignore_reason():
                         component_dict[cpt.cid] = cpt
                         cpt.set_srcdata_checksum_from_data(mdata['data'] + pkg.version)

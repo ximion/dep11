@@ -30,7 +30,7 @@ from io import StringIO
 from .component import Component, Screenshot, IconType, ProvidedItemType
 from .utils import str_enc_dec
 
-def read_desktop_data(cpt, dcontent, ignore_nodisplay=False):
+def read_desktop_data(cpt, dcontent, langpacks, ignore_nodisplay=False):
     '''
     Parses a .desktop file and sets ComponentData properties
     '''
@@ -56,6 +56,12 @@ def read_desktop_data(cpt, dcontent, ignore_nodisplay=False):
             # we don't care if the NoDisplay variable doesn't exist
             # if it isn't there, the file should be processed
             pass
+
+        try:
+            ubuntu_gettext_domain = df.get("Desktop Entry", "X-Ubuntu-Gettext-Domain")
+        except:
+            # Most packages won't have this, that's ok
+            ubuntu_gettext_domain = None
 
         try:
             asignore = df.get("Desktop Entry", "X-AppStream-Ignore")
@@ -90,6 +96,9 @@ def read_desktop_data(cpt, dcontent, ignore_nodisplay=False):
         if key.startswith("name"):
             if key == 'name':
                 cpt.name['C'] = value
+                if ubuntu_gettext_domain:
+                    for (locale, translation) in langpacks.get(ubuntu_gettext_domain, value):
+                        cpt.name[locale] = translation
             else:
                 cpt.name[key[5:-1]] = value
         elif key == 'categories':
@@ -99,36 +108,39 @@ def read_desktop_data(cpt, dcontent, ignore_nodisplay=False):
         elif key.startswith('comment'):
             if key == 'comment':
                 cpt.summary['C'] = value
+                if ubuntu_gettext_domain:
+                    for (locale, translation) in langpacks.get(ubuntu_gettext_domain, value):
+                        cpt.summary[locale] = translation
             else:
                 cpt.summary[key[8:-1]] = value
         elif key.startswith('keywords'):
+            orig_value = value
             value = re.split(';|,', value)
+
+            def add_keyword(locale, keywords):
+                keywords = list(filter(len, keywords)) # remove any empty elements
+                if cpt.keywords:
+                    if set(keywords) not in \
+                        [set(val) for val in
+                            cpt.keywords.values()]:
+                        cpt.keywords.update(
+                            {locale: list(map(str_enc_dec, keywords))}
+                        )
+                else:
+                    cpt.keywords = {
+                        locale: list(map(str_enc_dec, keywords))
+                    }
+
             if not value[-1]:
                 value.pop()
             if key[8:] == '':
-                if cpt.keywords:
-                    if set(value) not in \
-                        [set(val) for val in
-                            cpt.keywords.values()]:
-                        cpt.keywords.update(
-                            {'C': list(map(str_enc_dec, value))}
-                        )
-                else:
-                    cpt.keywords = {
-                        'C': list(map(str_enc_dec, value))
-                    }
+                add_keyword('C', value)
+                if ubuntu_gettext_domain:
+                    for (locale, translation) in langpacks.get(ubuntu_gettext_domain, orig_value):
+                        translation = re.split(';|,', translation)
+                        add_keyword(locale, translation)
             else:
-                if cpt.keywords:
-                    if set(value) not in \
-                        [set(val) for val in
-                            cpt.keywords.values()]:
-                        cpt.keywords.update(
-                            {key[9:-1]: list(map(str_enc_dec, value))}
-                        )
-                else:
-                    cpt.keywords = {
-                        key[9:-1]: list(map(str_enc_dec, value))
-                    }
+                add_keyword(key[9:-1], value)
         elif key == 'mimetype':
             value = value.split(';')
             if len(value) > 1:

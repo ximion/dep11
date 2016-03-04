@@ -204,6 +204,23 @@ class IconHandler:
         if icon_str.startswith("/"):
             if icon_str[1:] in pkg.debfile.get_filelist():
                 return self._store_icon(pkg, cpt, cpt_export_path, icon_str[1:], IconSize(64))
+            else:
+                def search_depends(pkg, seen_packages=list()):
+                    seen_packages.append(pkg.name)
+                    # look through the first level of dependencies
+                    for dep in pkg.depends:
+                        if icon_str[1:] in dep.debfile.get_filelist():
+                            return self._store_icon(dep, cpt, cpt_export_path, icon_str[1:], IconSize(64))
+
+                    # then the rest
+                    for dep in pkg.depends:
+                        if dep.name not in seen_packages and search_depends(dep, seen_packages):
+                            return True
+
+                    return False
+
+                if search_depends(pkg):
+                    return True
         else:
             icon_str = os.path.basename(icon_str)
 

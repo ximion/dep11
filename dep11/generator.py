@@ -25,6 +25,7 @@ import traceback
 from argparse import ArgumentParser
 import multiprocessing as mp
 import logging as log
+import yaml
 
 from dep11 import DataCache, MetadataExtractor
 from .component import get_dep11_header
@@ -177,70 +178,96 @@ class DEP11Generator:
             new_components = False
             for arch in suite['architectures']:
                 pkglist = self._get_packages_for(suite_name, component, arch)
+                suite_component_arch = "%s/%s/%s" % (suite_name, component, arch)
+
+                dep11_dir = os.path.join(self._export_dir, "data", suite_name, component)
+                data_fname = os.path.join(dep11_dir, "Components-%s.yml.gz" % (arch))
+
+                last_seen_pkgs = set()
+                try:
+                    for y in yaml.load_all(gzip.open(data_fname, 'r')):
+                        if 'Package' in y:
+                            last_seen_pkgs.add(y['Package'])
+                except FileNotFoundError:
+                    pass
 
                 # compile a list of packages that we need to look into
                 pkgs_todo = dict()
                 for pkg in pkglist:
                     pkid = pkg.pkid
 
+                    last_seen_pkgs.discard(pkg.name)
+
                     # check if we scanned the package already
                     if self._cache.package_exists(pkid):
+                        if not self._cache.package_in_suite(pkid, suite_component_arch) and not self._cache.is_ignored(pkid):
+                            log.info("Seen %s before, but not in %s" % (pkid, suite_component_arch))
+                            self._cache.add_package_to_suite(pkid, suite_component_arch)
+                            new_components = True
                         continue
                     pkgs_todo[pkid] = pkg
 
-                if not pkgs_todo:
-                    log.info("Skipped %s/%s/%s, no new packages to process." % (suite_name, component, arch))
+                # some packages have been removed
+                if last_seen_pkgs:
+                    for pkg in last_seen_pkgs:
+                        self._cache.remove_package_from_suite(pkid, suite_component_arch)
+                    new_components = True
+
+                if not pkgs_todo and not new_components:
+                    log.info("Skipped %s, no new packages to process." % suite_component_arch)
                     continue
 
-                # set up metadata extractor
-                icon_theme = suite.get('useIconTheme')
-                iconh = IconHandler(suite_name, component, arch, self._archive_root,
-                                               icon_theme, base_suite_name=suite.get('baseSuite'))
-                iconh.set_wanted_icon_sizes(self._icon_sizes)
-                mde = MetadataExtractor(suite_name,
-                                component,
-                                self._cache,
-                                iconh)
+                if pkgs_todo:
+                    # set up metadata extractor
+                    icon_theme = suite.get('useIconTheme')
+                    iconh = IconHandler(suite_name, component, arch, self._archive_root,
+                                                   icon_theme, base_suite_name=suite.get('baseSuite'))
+                    iconh.set_wanted_icon_sizes(self._icon_sizes)
+                    mde = MetadataExtractor(suite_name,
+                                    component,
+                                    arch,
+                                    self._cache,
+                                    iconh)
 
-                # Multiprocessing can't cope with LMDB open in the cache,
-                # but instead of throwing an error or doing something else
-                # that makes debugging easier, it just silently skips each
-                # multprocessing task. Stupid thing.
-                # (remember to re-open the cache later)
-                self._cache.close()
+                    # Multiprocessing can't cope with LMDB open in the cache,
+                    # but instead of throwing an error or doing something else
+                    # that makes debugging easier, it just silently skips each
+                    # multprocessing task. Stupid thing.
+                    # (remember to re-open the cache later)
+                    self._cache.close()
 
-                # set up multiprocessing
-                with mp.Pool(maxtasksperchild=24) as pool:
-                    count = 1
-                    def handle_results(result):
-                        nonlocal count
-                        nonlocal new_components
-                        (message, any_components) = result
-                        new_components = new_components or any_components
-                        log.info(message.format(count, len(pkgs_todo)))
-                        count += 1
+                    # set up multiprocessing
+                    with mp.Pool(maxtasksperchild=24) as pool:
+                        count = 1
+                        def handle_results(result):
+                            nonlocal count
+                            nonlocal new_components
+                            (message, any_components) = result
+                            new_components = new_components or any_components
+                            log.info(message.format(count, len(pkgs_todo)))
+                            count += 1
 
-                    def handle_error(e):
-                        traceback.print_exception(type(e), e, e.__traceback__)
-                        log.error(str(e))
-                        pool.terminate()
-                        sys.exit(5)
+                        def handle_error(e):
+                            traceback.print_exception(type(e), e, e.__traceback__)
+                            log.error(str(e))
+                            pool.terminate()
+                            sys.exit(5)
 
-                    log.info("Processing %i packages in %s/%s/%s" % (len(pkgs_todo), suite_name, component, arch))
-                    for pkid, pkg in pkgs_todo.items():
-                        package_fname = os.path.join (self._archive_root, pkg.filename)
-                        if not os.path.exists(package_fname):
-                            log.warning('Package not found: %s' % (package_fname))
-                            continue
-                        pkg.filename = package_fname
-                        pool.apply_async(extract_metadata,
-                                    (mde, suite_name, pkg),
-                                    callback=handle_results, error_callback=handle_error)
-                    pool.close()
-                    pool.join()
+                        log.info("Processing %i packages in %s" % (len(pkgs_todo), suite_component_arch))
+                        for pkid, pkg in pkgs_todo.items():
+                            package_fname = os.path.join (self._archive_root, pkg.filename)
+                            if not os.path.exists(package_fname):
+                                log.warning('Package not found: %s' % (package_fname))
+                                continue
+                            pkg.filename = package_fname
+                            pool.apply_async(extract_metadata,
+                                        (mde, suite_name, pkg),
+                                        callback=handle_results, error_callback=handle_error)
+                        pool.close()
+                        pool.join()
 
-                # reopen the cache, we need it
-                self._cache.reopen()
+                    # reopen the cache, we need it
+                    self._cache.reopen()
 
                 hints_dir = os.path.join(self._export_dir, "hints", suite_name, component)
                 if not os.path.exists(hints_dir):
@@ -250,16 +277,13 @@ class DEP11Generator:
 
                 dep11_header = get_dep11_header(self._repo_name, suite_name, component, os.path.join(self._dep11_url, component), suite.get('dataPriority', 0))
 
-                dep11_dir = os.path.join(self._export_dir, "data", suite_name, component)
                 if not os.path.exists(dep11_dir):
                     os.makedirs(dep11_dir)
 
                 if not new_components:
-                    log.info("Skipping %s/%s/%s, no components in any of the new packages.", suite_name, component, arch)
+                    log.info("Skipping %s, no components in any of the new packages.", suite_component_arch)
                 else:
                     # now write data to disk
-                    data_fname = os.path.join(dep11_dir, "Components-%s.yml.gz" % (arch))
-
                     data_f = gzip.open(data_fname+".new", 'wb')
 
                     data_f.write(bytes(dep11_header, 'utf-8'))

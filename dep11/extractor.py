@@ -33,11 +33,12 @@ class MetadataExtractor:
     Takes a deb file and extracts component metadata from it.
     '''
 
-    def __init__(self, suite_name, component, dcache, icon_handler):
+    def __init__(self, suite_name, component, arch, dcache, icon_handler):
         '''
         Initialize the object with List of files.
         '''
         self._suite_name = suite_name
+        self._arch = arch
         self._archive_component = component
         self._export_dir = dcache.media_dir
         self._dcache = dcache
@@ -318,6 +319,7 @@ class MetadataExtractor:
         if self.write_to_cache:
             # write the components we found to the cache
             self._dcache.set_components(pkgid, cpts)
+            self._dcache.add_package_to_suite(pkgid, "%s/%s/%s" % (self._suite_name, self._archive_component, self._arch))
 
         # ensure DebFile is closed so we don't run out of FDs when too many
         # files are open.

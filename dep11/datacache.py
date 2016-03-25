@@ -139,6 +139,7 @@ class DataCache:
             suites = txn.get(pkgid)
             if not suites:
                 return
+            suites = yaml.load(suites)
             suites.discard(suite)
             txn.put(pkgid, yaml.dump(suites))
 

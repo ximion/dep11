@@ -141,7 +141,7 @@ class DataCache:
                 return
             suites = yaml.load(suites)
             suites.discard(suite)
-            txn.put(pkgid, yaml.dump(suites))
+            txn.put(pkgid, tobytes(yaml.dump(suites)))
 
     def get_cpt_gids_for_pkg(self, pkgid):
         pkgid = tobytes(pkgid)

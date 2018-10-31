@@ -21,6 +21,7 @@ import shutil
 import logging as log
 import lmdb
 from math import pow
+import yaml
 
 
 def tobytes(s):
@@ -49,12 +50,13 @@ class DataCache:
 
 
     def open(self, cachedir):
-        self._dbenv = lmdb.open(cachedir, max_dbs=4, map_size=self._map_size, metasync=False)
+        self._dbenv = lmdb.open(cachedir, max_dbs=5, map_size=self._map_size, metasync=False)
 
         self._pkgdb = self._dbenv.open_db(b'packages')
         self._hintsdb = self._dbenv.open_db(b'hints')
         self._datadb = self._dbenv.open_db(b'metadata')
         self._statsdb = self._dbenv.open_db(b'statistics')
+        self._suitesdb = self._dbenv.open_db(b'suites')
 
         self._opened = True
         self.cache_dir = cachedir
@@ -71,6 +73,7 @@ class DataCache:
         self._datadb = None
         self._dbenv = None
         self._statsdb = None
+        self._suitesdb = None
         self._opened = False
 
 
@@ -107,6 +110,38 @@ class DataCache:
         with self._dbenv.begin(db=self._pkgdb, write=True) as txn:
             txn.put(pkgid, b'ignore')
 
+    def package_in_suite(self, pkgid, suite):
+        pkgid = tobytes(pkgid)
+        with self._dbenv.begin(db=self._suitesdb) as txn:
+            yaml_suites = txn.get(pkgid)
+
+            if not yaml_suites:
+                return False
+
+            suites = yaml.load(yaml_suites)
+
+            return suite in suites
+
+    def add_package_to_suite(self, pkgid, suite):
+        pkgid = tobytes(pkgid)
+        with self._dbenv.begin(db=self._suitesdb, write=True) as txn:
+            suites = txn.get(pkgid)
+            if not suites:
+                suites = set()
+            else:
+                suites = yaml.load(suites)
+            suites.add(suite)
+            txn.put(pkgid, tobytes(yaml.dump(suites)))
+
+    def remove_package_from_suite(self, pkgid, suite):
+        pkgid = tobytes(pkgid)
+        with self._dbenv.begin(db=self._suitesdb, write=True) as txn:
+            suites = txn.get(pkgid)
+            if not suites:
+                return
+            suites = yaml.load(suites)
+            suites.discard(suite)
+            txn.put(pkgid, tobytes(yaml.dump(suites)))
 
     def get_cpt_gids_for_pkg(self, pkgid):
         pkgid = tobytes(pkgid)
@@ -172,7 +207,6 @@ class DataCache:
             with self._dbenv.begin(db=self._pkgdb, write=True) as txn:
                 txn.put(pkgid, b'seen')
 
-
     def get_hints(self, pkgid):
         pkgid = tobytes(pkgid)
         with self._dbenv.begin(db=self._hintsdb) as txn:
@@ -205,6 +239,8 @@ class DataCache:
             pktxn.delete(pkgid)
         with self._dbenv.begin(db=self._hintsdb, write=True) as htxn:
             htxn.delete(pkgid)
+        with self._dbenv.begin(db=self._suitesdb, write=True) as stxn:
+            stxn.delete(pkgid)
 
 
     def is_ignored(self, pkgid):
@@ -360,6 +396,14 @@ class DataCache:
                 pkid_str = str(pkid, 'utf-8')
                 if pkid_str.startswith(pkgname+'/'):
                      htxn.delete(pkid)
+                     data_removed = True
+
+        with self._dbenv.begin(db=self._suitesdb, write=True) as stxn:
+            cursor = stxn.cursor()
+            for pkid, data in cursor:
+                pkid_str = str(pkid, 'utf-8')
+                if pkid_str.startswith(pkgname+'/'):
+                     stxn.delete(pkid)
                      data_removed = True
 
         return data_removed

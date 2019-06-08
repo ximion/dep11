@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU Lesser General Public
 # License along with this program.
 
+from collections import defaultdict
 import os
 import sys
 import apt_pkg
@@ -25,10 +26,12 @@ import traceback
 from argparse import ArgumentParser
 import multiprocessing as mp
 import logging as log
+from functools import partial
 
 from dep11 import DataCache, MetadataExtractor
 from .component import get_dep11_header
 from .iconhandler import IconHandler
+from .ubuntulangpackhandler import UbuntuLangpackHandler
 from .utils import load_generator_config
 from .package import read_packages_dict_from_file
 from .reportgenerator import ReportGenerator
@@ -63,6 +66,8 @@ class DEP11Generator:
         conf = load_generator_config(dep11_dir)
         if not conf:
             return False
+
+        self._all_pkgs = defaultdict(partial(defaultdict, partial(defaultdict, list)))
 
         self._dep11_url = conf.get("MediaBaseUrl")
         self._icon_sizes = conf.get("IconSizes")
@@ -166,6 +171,9 @@ class DEP11Generator:
         if not suite:
             log.error("Suite '%s' not found!" % (suite_name))
             return False
+        base_suite_name = suite.get('baseSuite')
+
+        base_suite = self._suites_data.get(base_suite_name) if base_suite_name else None
 
         # We need 'forkserver' as startup method to prevent deadlocks on join()
         # Something in the extractor is doing weird things, makes joining impossible
@@ -173,10 +181,23 @@ class DEP11Generator:
         mp.set_start_method('forkserver')
 
         for component in suite['components']:
+            for arch in suite['architectures']:
+                self._all_pkgs[suite_name][component][arch] = \
+                    self._get_packages_for(suite_name, component, arch)
+
+        if base_suite:
+            for component in base_suite['components']:
+                for arch in base_suite['architectures']:
+                    self._all_pkgs[base_suite_name][component][arch] = \
+                        self._get_packages_for(base_suite_name, component, arch)
+
+        langpacks = UbuntuLangpackHandler(suite, suite_name, self._all_pkgs)
+
+        for component in suite['components']:
             all_cpt_pkgs = list()
             new_components = False
             for arch in suite['architectures']:
-                pkglist = self._get_packages_for(suite_name, component, arch)
+                pkglist = self._all_pkgs[suite_name][component][arch]
 
                 # compile a list of packages that we need to look into
                 pkgs_todo = dict()
@@ -200,7 +221,8 @@ class DEP11Generator:
                 mde = MetadataExtractor(suite_name,
                                 component,
                                 self._cache,
-                                iconh)
+                                iconh,
+                                langpacks)
 
                 # Multiprocessing can't cope with LMDB open in the cache,
                 # but instead of throwing an error or doing something else
@@ -287,6 +309,8 @@ class DEP11Generator:
             self.make_icon_tar(suite_name, component, all_cpt_pkgs)
 
             log.info("Completed metadata extraction for suite %s/%s" % (suite_name, component))
+
+        langpacks.cleanup()
 
 
     def expire_cache(self):
